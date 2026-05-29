@@ -32,7 +32,7 @@ export default function SessionScreen() {
     topic,
     contextSelection,
     selfAssessment,
-    uploadedContext,
+    uploadedChunks,
     conversationHistory,
     knowledgePanelState,
     sessionPhase,
@@ -40,6 +40,7 @@ export default function SessionScreen() {
     sessionMode,
     topicType,
     exchangeCount,
+    preGeneratedQuiz,
   } = state;
 
   // Direct knowledge panel update since Claude's API has no 15 RPM limit
@@ -47,14 +48,15 @@ export default function SessionScreen() {
     try {
       const panelData = await updateKnowledgePanel({
         topic,
-        uploadedContext,
+        uploadedChunks,
         conversationHistory: historyToUse,
+        preGeneratedQuiz,
       });
       updatePanel(panelData);
     } catch (err) {
       console.error("Panel update failed:", err);
     }
-  }, [topic, uploadedContext, updatePanel]);
+  }, [topic, uploadedChunks, preGeneratedQuiz, updatePanel]);
 
   // Auto-scroll to bottom of chat
   useEffect(() => {
@@ -76,25 +78,69 @@ export default function SessionScreen() {
   useEffect(() => {
     if (exchangeCount === 5 && sessionMode === 'explanation') {
       setSessionMode('misconception');
-      addMessage({ type: 'transition', label: 'Sage wants to check its understanding' });
+      const transitionMsg = { type: 'transition', label: 'Sage wants to check its understanding' };
+      addMessage(transitionMsg);
       addModeHistory({ mode: 'misconception', startedAtExchange: 5 });
+      setTimeout(() => {
+        triggerAutoResponse('misconception', [...conversationHistory, transitionMsg]);
+      }, 600);
     } else if (exchangeCount === 7 && sessionMode === 'misconception') {
       const nextMode = topicType === 'procedural' ? 'problem' : 'connection';
       setSessionMode(nextMode);
-      addMessage({
+      const transitionMsg = {
         type: 'transition',
         label: nextMode === 'problem' 
           ? 'Sage is going to try a practice problem'
           : 'Sage wants to connect what it\'s learned'
-      });
+      };
+      addMessage(transitionMsg);
       addModeHistory({ mode: nextMode, startedAtExchange: 7 });
+      setTimeout(() => {
+        triggerAutoResponse(nextMode, [...conversationHistory, transitionMsg]);
+      }, 600);
     } else if (exchangeCount === 9 && (sessionMode === 'problem' || sessionMode === 'connection')) {
       setSessionMode('explanation');
       addMessage({ type: 'transition', label: 'Back to teaching' });
       addModeHistory({ mode: 'explanation', startedAtExchange: 9 });
       setTimeout(() => setShowNudge(true), 1500); // Trigger nudge after returning to explanation
     }
-  }, [exchangeCount, sessionMode, topicType, addMessage, addModeHistory, setSessionMode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exchangeCount]);
+
+  const triggerAutoResponse = async (targetMode, historyForCall) => {
+    setIsGenerating(true);
+    // Add empty assistant message to stream into
+    addMessage({ role: 'assistant', content: '' });
+
+    try {
+      await streamConversationResponse({
+        topic,
+        contextSelection,
+        selfAssessment,
+        uploadedChunks,
+        conversationHistory: historyForCall,
+        sessionMode: targetMode,
+        onChunk: (chunk) => {
+          appendToLastMessage(chunk);
+        },
+        onComplete: async (fullText) => {
+          const updatedHistory = [
+            ...historyForCall,
+            { role: 'assistant', content: fullText },
+          ];
+          schedulePanelUpdate(updatedHistory);
+        },
+        onError: (err) => {
+          toast.error(`Failed to get response: ${err.message}`);
+        },
+      });
+    } catch {
+      // Error already handled
+    } finally {
+      setIsGenerating(false);
+      inputRef.current?.focus();
+    }
+  };
 
   const handleSageGreeting = async () => {
     setIsGenerating(true);
@@ -108,7 +154,7 @@ export default function SessionScreen() {
         topic,
         contextSelection,
         selfAssessment,
-        uploadedContext,
+        uploadedChunks,
         conversationHistory: [
           { role: 'user', content: `I want to teach you about ${topic}. Let me start explaining.` },
         ],
@@ -169,7 +215,7 @@ export default function SessionScreen() {
         topic,
         contextSelection,
         selfAssessment,
-        uploadedContext,
+        uploadedChunks,
         conversationHistory: currentHistory,
         sessionMode,
         onChunk: (chunk) => {
@@ -191,7 +237,7 @@ export default function SessionScreen() {
       setIsGenerating(false);
       inputRef.current?.focus();
     }
-  }, [input, isGenerating, conversationHistory, topic, contextSelection, selfAssessment, uploadedContext, addMessage, appendToLastMessage, schedulePanelUpdate]);
+  }, [input, isGenerating, conversationHistory, topic, contextSelection, selfAssessment, uploadedChunks, preGeneratedQuiz, addMessage, appendToLastMessage, schedulePanelUpdate]);
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {

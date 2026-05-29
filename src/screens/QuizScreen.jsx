@@ -2,49 +2,40 @@ import { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import SageAvatar from '../components/SageAvatar';
 import TypingIndicator from '../components/TypingIndicator';
-import { generateQuizQuestions, generateQuizAnswers } from '../services/claude';
+import { generateQuizAnswers } from '../services/claude';
 import toast from 'react-hot-toast';
 
 export default function QuizScreen() {
-  const { state, setQuizQuestions, setQuizResults, setPhase } = useApp();
-  const [loading, setLoading] = useState(true);
+  const { state, setQuizResults, setPhase, setPanelFrozen } = useApp();
+  const [previewMode, setPreviewMode] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [currentQuestion, setCurrentQuestion] = useState(0);
   const [questionPhase, setQuestionPhase] = useState('thinking'); // 'thinking' | 'revealed'
   const [allRevealed, setAllRevealed] = useState(false);
 
-  const { topic, uploadedContext, conversationHistory, quizResults } = state;
+  const { topic, conversationHistory, quizResults, preGeneratedQuiz } = state;
 
-  const generateQuiz = async () => {
+  const evaluateQuiz = async () => {
+    setPreviewMode(false);
+    setLoading(true);
     try {
-      // Call 3a: Generate questions
-      const questions = await generateQuizQuestions({
-        topic,
-        uploadedContext,
-        conversationHistory,
-      });
-      setQuizQuestions(questions);
-
-      // Call 3b: Generate Sage's answers
       const results = await generateQuizAnswers({
         topic,
         conversationHistory,
-        quizQuestions: questions,
+        preGeneratedQuiz,
       });
       setQuizResults(results);
-
-      setLoading(false);
     } catch (err) {
       toast.error(`Failed to generate quiz: ${err.message}`);
+    } finally {
+      setLoading(false);
     }
   };
 
-  // Generate quiz on mount
-  useEffect(() => {
-    setTimeout(() => {
-      generateQuiz();
-    }, 0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const handleGoBack = () => {
+    setPanelFrozen(false);
+    setPhase('teaching');
+  };
 
   // Auto-advance through questions
   useEffect(() => {
@@ -96,6 +87,75 @@ export default function QuizScreen() {
     ? ((totalCorrect + totalPartial * 0.5) / quizResults.length) * 100
     : 0;
 
+  // Preview state
+  if (previewMode) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4 bg-cream">
+        <div className="w-full max-w-xl text-center animate-fade-in">
+          <div className="flex justify-center mb-6">
+            <SageAvatar size="lg" state="neutral" />
+          </div>
+          <h2 className="text-navy-100 mb-6" style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.01em' }}>
+            Sage will be tested on:
+          </h2>
+          <div className="flex flex-wrap justify-center gap-3 mb-10">
+            {preGeneratedQuiz && preGeneratedQuiz.length > 0 ? (
+              preGeneratedQuiz.map((q, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    background: '#FFFFFF',
+                    border: '1px solid #E0DED8',
+                    borderRadius: 999,
+                    padding: '8px 16px',
+                    fontSize: 14,
+                    fontWeight: 500,
+                    color: '#3D3D3A',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.04)'
+                  }}
+                >
+                  {q.concept}
+                </div>
+              ))
+            ) : (
+              <div
+                style={{
+                  background: '#FFFFFF',
+                  border: '1px solid #E0DED8',
+                  borderRadius: 999,
+                  padding: '8px 16px',
+                  fontSize: 14,
+                  fontWeight: 500,
+                  color: '#7A7975',
+                  fontStyle: 'italic',
+                }}
+              >
+                The concepts you just explained
+              </div>
+            )}
+          </div>
+          
+          <div className="flex flex-col sm:flex-row gap-4 justify-center">
+            <button
+              onClick={handleGoBack}
+              className="rounded-xl font-semibold hover:border-accent-amber hover:text-accent-amber transition-all duration-200 btn-hover-lift"
+              style={{ height: 48, padding: '0 24px', fontSize: 14, border: '2px solid #E0DED8', color: '#5A5955', background: 'transparent' }}
+            >
+              Go back and keep teaching
+            </button>
+            <button
+              onClick={evaluateQuiz}
+              className="rounded-xl bg-accent-amber text-charcoal font-semibold btn-hover-lift"
+              style={{ height: 48, padding: '0 24px', fontSize: 14, boxShadow: '0 2px 12px rgba(245,166,35,0.2)' }}
+            >
+              Start the quiz
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Loading state
   if (loading) {
     return (
@@ -105,10 +165,10 @@ export default function QuizScreen() {
             <SageAvatar size="lg" state="thinking" />
           </div>
           <h2 className="mt-5 text-navy-100" style={{ fontSize: 18, fontWeight: 600 }}>
-            Preparing Sage's quiz...
+            Sage is taking the quiz...
           </h2>
           <p className="mt-2 text-navy-400" style={{ fontSize: 14, fontWeight: 400 }}>
-            Sage is getting ready to show what it learned.
+            Evaluating everything you taught.
           </p>
           <div className="mt-5">
             <TypingIndicator />
@@ -119,20 +179,20 @@ export default function QuizScreen() {
   }
 
   return (
-    <div className="min-h-screen flex items-start justify-center px-6 py-16 md:py-24 bg-cream">
+    <div className="min-h-screen flex items-start justify-center px-6 py-24 md:py-32 bg-cream">
       <div className="w-full max-w-2xl">
         {/* Header */}
-        <div className="text-center mb-14 animate-fade-in">
+        <div className="text-center mb-20 animate-fade-in">
           <h1 className="text-navy-100" style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.01em' }}>
             Let's see what Sage learned.
           </h1>
-          <p className="mt-3 text-navy-400 max-w-xl mx-auto" style={{ fontSize: 14, fontWeight: 400, lineHeight: 1.65 }}>
+          <p className="mt-6 text-navy-400 max-w-xl mx-auto" style={{ fontSize: 14, fontWeight: 400, lineHeight: 1.65 }}>
             Sage will now answer some questions based only on what you taught. Watch how it does.
           </p>
         </div>
 
         {/* Progress dots */}
-        <div className="flex justify-center gap-3 mb-12">
+        <div className="flex justify-center gap-4 mb-20">
           {quizResults.map((_, idx) => {
             let bg = '#E0DED8';
             if (idx < currentQuestion) {
@@ -208,6 +268,11 @@ export default function QuizScreen() {
                       }}>
                         {quizResults[currentQuestion].sage_answer}
                       </p>
+                      {quizResults[currentQuestion].was_taught === false && (
+                        <p style={{ fontSize: 12, color: '#DC5A5A', fontStyle: 'italic', marginTop: 8 }}>
+                          Sage was never taught this — it wasn't covered in your explanation.
+                        </p>
+                      )}
                     </div>
                   </div>
 

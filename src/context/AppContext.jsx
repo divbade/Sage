@@ -7,7 +7,7 @@ const initialState = {
   contextSelection: '',
   selfAssessment: '',
   uploadedFiles: [],
-  uploadedContext: '',
+  uploadedChunks: [],
   openingConfidence: null,
   conversationHistory: [],
   knowledgePanelState: {
@@ -20,7 +20,7 @@ const initialState = {
   topicType: null,            // 'procedural' | 'conceptual'
   exchangeCount: 0,
   modeHistory: [],            // [{ mode, startedAtExchange }]
-  quizQuestions: [],
+  preGeneratedQuiz: [],
   quizResults: [],
   resultsReflection: {},
   panelFrozen: false,
@@ -35,20 +35,20 @@ function appReducer(state, action) {
       return { ...state, contextSelection: action.payload };
     case 'SET_ASSESSMENT':
       return { ...state, selfAssessment: action.payload };
-    case 'ADD_FILE':
+    case 'ADD_FILE': {
+      const newFiles = [...state.uploadedFiles, action.payload];
       return {
         ...state,
-        uploadedFiles: [...state.uploadedFiles, action.payload],
-        uploadedContext: [...state.uploadedFiles, action.payload]
-          .map((f) => f.text)
-          .join('\n\n---\n\n'),
+        uploadedFiles: newFiles,
+        uploadedChunks: newFiles.flatMap((f) => f.chunks || []),
       };
+    }
     case 'REMOVE_FILE': {
       const remaining = state.uploadedFiles.filter((_, i) => i !== action.payload);
       return {
         ...state,
         uploadedFiles: remaining,
-        uploadedContext: remaining.map((f) => f.text).join('\n\n---\n\n'),
+        uploadedChunks: remaining.flatMap((f) => f.chunks || []),
       };
     }
     case 'SET_CONFIDENCE':
@@ -82,8 +82,8 @@ function appReducer(state, action) {
       return { ...state, modeHistory: [...state.modeHistory, action.payload] };
     case 'SET_PANEL_FROZEN':
       return { ...state, panelFrozen: action.payload };
-    case 'SET_QUIZ_QUESTIONS':
-      return { ...state, quizQuestions: action.payload };
+    case 'SET_PRE_GENERATED_QUIZ':
+      return { ...state, preGeneratedQuiz: action.payload };
     case 'SET_QUIZ_RESULTS':
       return { ...state, quizResults: action.payload };
     case 'SET_REFLECTION':
@@ -97,7 +97,7 @@ function appReducer(state, action) {
         contextSelection: state.contextSelection,
         selfAssessment: state.selfAssessment,
         uploadedFiles: state.uploadedFiles,
-        uploadedContext: state.uploadedContext,
+        uploadedChunks: state.uploadedChunks,
         previousConfidence: state.openingConfidence,
       };
     default:
@@ -124,7 +124,7 @@ export function AppProvider({ children }) {
     incrementExchange: () => dispatch({ type: 'INCREMENT_EXCHANGE' }),
     addModeHistory: (entry) => dispatch({ type: 'ADD_MODE_HISTORY', payload: entry }),
     setPanelFrozen: (frozen) => dispatch({ type: 'SET_PANEL_FROZEN', payload: frozen }),
-    setQuizQuestions: (questions) => dispatch({ type: 'SET_QUIZ_QUESTIONS', payload: questions }),
+    setPreGeneratedQuiz: (quiz) => dispatch({ type: 'SET_PRE_GENERATED_QUIZ', payload: quiz }),
     setQuizResults: (results) => dispatch({ type: 'SET_QUIZ_RESULTS', payload: results }),
     setReflection: (reflection) => dispatch({ type: 'SET_REFLECTION', payload: reflection }),
     resetFull: () => dispatch({ type: 'RESET_FULL' }),

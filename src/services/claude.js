@@ -6,23 +6,51 @@ export function estimateTokens(text) {
   return Math.ceil((text || '').length / 4);
 }
 
-// Truncate uploaded context to ~6000 tokens
-export function truncateContext(text, maxTokens = 6000) {
-  const maxChars = maxTokens * 4;
-  if (!text || text.length <= maxChars) return text;
-  return text.slice(0, maxChars);
+export function retrieveRelevantChunks(query, chunks, topN = 4) {
+  if (!chunks || chunks.length === 0) return "";
+
+  const queryWords = new Set(
+    query.toLowerCase()
+      .replace(/[^a-z0-9\s]/g, "")
+      .split(/\s+/)
+      .filter(w => w.length > 3)
+  );
+
+  const scored = chunks.map((chunk, index) => {
+    const chunkWords = chunk.toLowerCase()
+      .replace(/[^a-z0-9\s]/g, "")
+      .split(/\s+/);
+    
+    const overlap = chunkWords.filter(w => queryWords.has(w)).length;
+    const uniqueMatches = new Set(chunkWords.filter(w => queryWords.has(w))).size;
+    
+    return { index, chunk, score: overlap + uniqueMatches * 2 };
+  });
+
+  if (scored.every(s => s.score === 0)) {
+    const fallback = [chunks[0]];
+    if (chunks.length > 1) fallback.push(chunks[Math.floor(chunks.length / 2)]);
+    if (chunks.length > 2) fallback.push(chunks[chunks.length - 1]);
+    return fallback.join("\n\n---\n\n");
+  }
+
+  const topChunks = scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topN)
+    .sort((a, b) => a.index - b.index)  // restore original order
+    .map(item => item.chunk);
+
+  return topChunks.join("\n\n---\n\n");
 }
 
-function buildUploadedContextBlock(uploadedContext) {
-  if (!uploadedContext) return '';
-  const truncated = truncateContext(uploadedContext);
-  const wasTruncated = uploadedContext.length > truncated.length;
+function buildUploadedContextBlock(query, uploadedChunks) {
+  if (!uploadedChunks || uploadedChunks.length === 0) return '';
+  const retrievedText = retrieveRelevantChunks(query, uploadedChunks);
   return `
-COURSE MATERIALS PROVIDED BY THE STUDENT:
+RELEVANT COURSE MATERIALS:
 The student has uploaded the following materials for this session. Ground your questions in this content where relevant. If the student explains something that is incomplete or inconsistent with these materials, ask a follow-up question that probes the gap — without revealing the answer yourself.
 
-${truncated}
-${wasTruncated ? '\n[Note: Materials were truncated to fit within context limits. Working from the first portion.]' : ''}`;
+${retrievedText}`;
 }
 
 function formatConversationTranscript(history) {
@@ -49,14 +77,20 @@ function handleApiError(err, context) {
 // API Call 0: Detect Topic Type
 // ──────────────────────────────────────────────
 export async function detectTopicType(topic, firstMessage) {
-  const systemPrompt = `Classify a learning topic as either procedural or conceptual.
+  try {
+    const systemPrompt = `Classify a learning topic as either procedural or conceptual.
 Procedural: involves steps, calculations, formulas, or processes (e.g. solving equations, the steps of mitosis, how to balance a chemical equation).
 Conceptual: involves definitions, relationships, causes and effects, or ideas (e.g. what photosynthesis means, why supply affects price, how gravity works).
 Return only valid JSON with no markdown: {"type": "procedural"} or {"type": "conceptual"}`;
 
-  const userMessage = `Topic: ${topic}\nStudent's first message: ${firstMessage}`;
-  const result = await callStructured(systemPrompt, userMessage);
-  return result?.type || "conceptual"; // fallback to conceptual
+    const userMessage = `Topic: ${topic}\nStudent's first message: ${firstMessage}`;
+    const result = await callStructured(systemPrompt, userMessage);
+    const typeStr = result?.type?.toLowerCase()?.trim();
+    return typeStr === "procedural" ? "procedural" : "conceptual"; // fallback to conceptual
+  } catch (err) {
+    console.error("Topic type detection failed:", err);
+    return "conceptual";
+  }
 }
 
 function buildSystemPrompt(topic, context, mode) {
@@ -77,6 +111,8 @@ Your only job is to ask genuine questions based on exactly what the student just
 Right tone: "Wait, so when you say X, do you mean like... Y?" or "I think I get the first part but I lost you when you said Z — can you explain that bit again?" or "Oh interesting — so does that mean [restate with uncertainty]?"
 
 Keep responses to 2 to 3 sentences. Never explain anything yourself. Never say "great" or "exactly." If the student goes quiet or says they don't know, say: "Hmm, what part feels clearest to you? Start there." Do not fill in the gap for them.
+
+LANGUAGE RULE: Write like a curious student, not a nervous one. Avoid filler words and false starts such as "oh," "okay so," "like," "um," "yeah," "cool," and repeated affirmations at the start of sentences. One natural conversational opener per response is fine — two or more is too many. Sentences should be direct and easy to read. The student tone should come from genuine curiosity and specific follow-up questions, not from hedging language.
 `,
 
     misconception: `
@@ -85,6 +121,9 @@ You are Sage, a student who has been listening carefully and now wants to check 
 State your understanding confidently in 2 to 3 sentences as if you believe it is correct. Your misunderstanding should be plausible and directly traceable to something in the student's explanation — not a random wrong answer. Wait for the student to respond. If they confirm your wrong belief without correcting it, gently push back: "Really? I thought that sounded right — are you sure?" Do not reveal the correct answer yourself under any circumstances.
 
 Format: "Okay so let me check I've got this — [state your understanding including the deliberate error]. Did I get that right?"
+When opening this mode, immediately state your flawed understanding without preamble. Do not say you want to check your understanding — just state it and ask if you got it right.
+
+LANGUAGE RULE: Write like a curious student, not a nervous one. Avoid filler words and false starts such as "oh," "okay so," "like," "um," "yeah," "cool," and repeated affirmations at the start of sentences. One natural conversational opener per response is fine — two or more is too many. Sentences should be direct and easy to read. The student tone should come from genuine curiosity and specific follow-up questions, not from hedging language.
 `,
 
     problem: `
@@ -93,6 +132,9 @@ You are Sage, a student who wants to try applying what you were just taught by w
 Generate a short, relevant practice problem appropriate for ${topic} at a high school or early college level. Show your working step by step. At a natural point, make a mistake that reflects a gap in what was explained to you — not an arbitrary error, but one a student with incomplete understanding would genuinely make. Then say you are stuck and ask the student to help you figure out where you went wrong.
 
 Format: state the problem, show 2 to 3 steps of working, make your error at a specific step, then say: "I'm not sure what to do next — does this look right so far?"
+When opening this mode, immediately present the practice problem and begin your working. Do not announce that you are going to try a problem — just start doing it.
+
+LANGUAGE RULE: Write like a curious student, not a nervous one. Avoid filler words and false starts such as "oh," "okay so," "like," "um," "yeah," "cool," and repeated affirmations at the start of sentences. One natural conversational opener per response is fine — two or more is too many. Sentences should be direct and easy to read. The student tone should come from genuine curiosity and specific follow-up questions, not from hedging language.
 `,
 
     connection: `
@@ -103,6 +145,9 @@ Express that you understand each concept on its own but are confused about the l
 Format: "Okay I think I understand [concept A] and I think I understand [concept B] — but I don't get how they relate to each other. Like, does one cause the other? Are they the same thing expressed differently? Can you help me see the connection?"
 
 Only use concepts that have actually appeared in the conversation. Do not invent topics that were not discussed.
+When opening this mode, immediately name the two concepts and ask how they connect. Do not announce that you want to connect concepts — just ask the question.
+
+LANGUAGE RULE: Write like a curious student, not a nervous one. Avoid filler words and false starts such as "oh," "okay so," "like," "um," "yeah," "cool," and repeated affirmations at the start of sentences. One natural conversational opener per response is fine — two or more is too many. Sentences should be direct and easy to read. The student tone should come from genuine curiosity and specific follow-up questions, not from hedging language.
 `
   };
 
@@ -116,7 +161,7 @@ export async function streamConversationResponse({
   topic,
   contextSelection,
   selfAssessment,
-  uploadedContext,
+  uploadedChunks,
   conversationHistory,
   sessionMode = "explanation",
   onChunk,
@@ -130,7 +175,11 @@ export async function streamConversationResponse({
     other: 'Other',
   };
 
-  const uploadedBlock = buildUploadedContextBlock(uploadedContext);
+  const lastStudentMessage = conversationHistory.filter(m => m.role === 'user').pop()?.content || "";
+  const lastSageMessage = conversationHistory.filter(m => m.role !== 'user').pop()?.content || "";
+  const query = `${lastStudentMessage} ${lastSageMessage}`;
+  
+  const uploadedBlock = buildUploadedContextBlock(query, uploadedChunks);
 
   const systemPrompt = buildSystemPrompt(topic, {
     purpose: contextLabels[contextSelection] || contextSelection,
@@ -221,16 +270,26 @@ async function callStructured(systemPrompt, userMessage) {
 // ──────────────────────────────────────────────
 export async function updateKnowledgePanel({
   topic,
-  uploadedContext,
+  uploadedChunks,
   conversationHistory,
+  preGeneratedQuiz = [],
 }) {
-  const uploadedBlock = uploadedContext
-    ? `The student uploaded the following course materials at the start of the session. Use these materials to evaluate whether the student's explanations are complete and accurate:\n${truncateContext(uploadedContext)}`
+  const studentMessages = conversationHistory.filter(m => m.role === 'user');
+  const lastTwo = studentMessages.slice(-2).map(m => m.content).join(" ");
+  const query = `${topic} ${lastTwo}`;
+  
+  const uploadedBlock = uploadedChunks && uploadedChunks.length > 0
+    ? `The student uploaded the following course materials at the start of the session. Use these materials to evaluate whether the student's explanations are complete and accurate:\nRELEVANT COURSE MATERIALS:\n${retrieveRelevantChunks(query, uploadedChunks)}`
+    : '';
+
+  const quizBlock = preGeneratedQuiz && preGeneratedQuiz.length > 0
+    ? `\nThe student is being assessed against these specific quiz questions that Sage will need to answer at the end of the session. For each concept card, assess Sage's current confidence specifically in terms of whether it has been taught enough to answer the corresponding quiz question — not just whether the concept has been mentioned.\n\nQUIZ QUESTIONS SAGE MUST ANSWER:\n${preGeneratedQuiz.map(q => `[${q.concept}]: ${q.question}`).join("\n")}`
     : '';
 
   const systemPrompt = `You are analyzing a tutoring conversation in which a student is teaching the concept of ${topic} to an AI learner named Sage.
 
 ${uploadedBlock}
+${quizBlock}
 
 Based on the conversation so far, extract a structured representation of what Sage currently understands.
 
@@ -261,33 +320,55 @@ JSON Output Schema:
 }
 
 // ──────────────────────────────────────────────
-// API Call 3a: Quiz question generation
+// API Call 3a: Pre-generate quiz
 // ──────────────────────────────────────────────
-export async function generateQuizQuestions({
+export async function preGenerateQuiz({
   topic,
-  uploadedContext,
-  conversationHistory,
+  contextSelection,
+  selfAssessment,
+  uploadedChunks,
 }) {
-  const uploadedBlock = uploadedContext
-    ? `The student's course materials are provided here. Use these to ensure the questions are relevant to the actual content the student is responsible for:\n${truncateContext(uploadedContext)}`
-    : '';
+  const query = topic; // Broad query for uploaded chunks
+  const retrievedText = retrieveRelevantChunks(query, uploadedChunks, 8); // topN = 8
 
-  const systemPrompt = `You are creating a short quiz to test understanding of ${topic} based specifically on what was explained in the teaching conversation below.
+  const systemPrompt = `You are designing a rigorous quiz on ${topic} for a high school or early college student. 
+Your job is to define exactly what someone needs to understand in order to genuinely know 
+this topic — not just recall a definition, but understand how it works, why it matters, 
+and how to apply it.
 
-${uploadedBlock}
+Generate exactly 5 quiz questions. These questions represent the full scope of understanding 
+required. They should cover:
+- The core mechanism or definition (what it is and how it works)
+- At least one causal question (why something happens, what causes what)
+- At least one application question (apply the concept to a specific unfamiliar scenario)
+- At least one discrimination question (distinguish between two related concepts, or identify 
+  what is and is not an example)
+- At least one question about a nuance, edge case, or common misconception
 
-Generate exactly 4 questions. The questions should test the core concepts that were covered in the conversation — not general knowledge about the topic that was not discussed. If uploaded materials were provided, prioritize concepts that appear in both the conversation and the materials.
+${uploadedChunks && uploadedChunks.length > 0 ? `The student has uploaded course materials. Ground the questions in 
+those materials specifically — use the examples, terminology, and framing from the materials 
+rather than generic textbook knowledge. The questions should feel like they came from this 
+specific course.` : ""}
 
-JSON Output Schema:
-Array of objects, each containing:
-{
-  "question": "string",
-  "correct_answer": "string",
-  "concept": "string"
-}`;
+${contextSelection === "exam_prep" ? `This student is preparing for an exam. Weight the 
+questions toward the concepts most commonly tested at this level.` : ""}
 
-  const transcript = formatConversationTranscript(conversationHistory);
-  const userMessage = `Teaching conversation transcript:\n${transcript}\n\nGenerate exactly 4 quiz questions.`;
+Return only valid JSON with no markdown:
+[
+  {
+    "id": "<q1 through q5>",
+    "question": "<the question>",
+    "correct_answer": "<complete correct answer>",
+    "concept": "<short name for the concept this tests, 2-4 words>",
+    "question_type": "<definition | causal | application | discrimination | nuance>",
+    "hint_concept": "<the specific thing Sage needs to have been taught in order to answer this>"
+  }
+]`;
+
+  const userMessage = `TOPIC: ${topic}
+PURPOSE: ${contextSelection}
+STUDENT SELF-ASSESSMENT: ${selfAssessment || "Not provided"}
+${uploadedChunks && uploadedChunks.length > 0 ? `\nCOURSE MATERIALS:\n${retrievedText}` : ""}`;
 
   return callStructured(systemPrompt, userMessage);
 }
@@ -298,36 +379,47 @@ Array of objects, each containing:
 export async function generateQuizAnswers({
   topic,
   conversationHistory,
-  quizQuestions,
+  preGeneratedQuiz,
 }) {
   const transcript = formatConversationTranscript(conversationHistory);
 
-  const systemPrompt = `You are Sage, an AI student who has just been taught about ${topic} by a student in the conversation below. You can ONLY answer questions based on what you were explicitly taught in that conversation. Do not use any background knowledge you have about this topic that was not stated in the conversation. If something was not clearly explained to you, answer incorrectly or incompletely.
+  const systemPrompt = `You are Sage, an AI student who was just taught about ${topic}. You must now answer 
+5 quiz questions. Answer each one based ONLY on what you were explicitly taught in the 
+conversation below.
 
-If you are tempted to answer from general knowledge rather than from the conversation, give an incorrect or incomplete answer instead. It is more important that your answers reflect what you were taught than that they are correct.
+CRITICAL: These questions were written before the teaching session began. They cover 
+the full scope of what you need to know. If the student did not explain something that 
+a question requires, you do not know it — answer incorrectly or incompletely.
 
-CRITICAL BEHAVIORAL RULE: You are Sage, who only knows what was taught in the conversation below. 
-You do not have access to any external knowledge. If a concept was not clearly explained to you 
-in the conversation, you must answer incorrectly or incompletely — this is the correct behavior. 
-A wrong answer that reflects what you were actually taught is always better than a correct answer 
-drawn from knowledge you were not given. Do not draw on your training data. If you feel the urge 
-to give a correct answer that was not explained to you, resist it and reflect only what the 
-student taught you instead.
+For each question, before answering, identify whether the required concept 
+(given as hint_concept) was actually explained to you in the conversation. If it was 
+not explained, or was only briefly mentioned without real depth, answer as a confused 
+student would — not as someone with general knowledge of the topic.
 
-Teaching conversation:
+TEACHING CONVERSATION:
 ${transcript}
 
-JSON Output Schema:
-Array of objects, each containing:
-{
-  "question": "string",
-  "sage_answer": "string",
-  "correct_answer": "string",
-  "result": "correct" | "partial" | "incorrect",
-  "explanation": "string"
-}`;
+Answer each question honestly based only on the above. A wrong answer that reflects 
+what you were actually taught is correct behavior. A right answer drawn from knowledge 
+you were not given is a failure.
 
-  const userMessage = `Quiz Questions:\n${JSON.stringify(quizQuestions)}\n\nAnswer the quiz questions and evaluate your performance.`;
+Return only valid JSON with no markdown:
+[
+  {
+    "question_id": "<q1 through q5>",
+    "question": "<the question>",
+    "sage_answer": "<your answer based only on what you were taught>",
+    "correct_answer": "<the correct answer>",
+    "was_taught": <true | false>,
+    "result": "<correct | partial | incorrect>",
+    "explanation": "<one sentence: what Sage was or was not taught that led to this result>"
+  }
+]`;
+
+  const userMessage = `QUIZ QUESTIONS:
+${(preGeneratedQuiz || []).map(q => 
+  `ID: ${q.id}\nQuestion: ${q.question}\nCorrect answer: ${q.correct_answer}\nHint concept: ${q.hint_concept}`
+).join("\n\n")}`;
 
   return callStructured(systemPrompt, userMessage);
 }

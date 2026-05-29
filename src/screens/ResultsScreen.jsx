@@ -23,6 +23,7 @@ export default function ResultsScreen() {
     quizResults,
     resultsReflection,
     uploadedFiles,
+    preGeneratedQuiz,
   } = state;
 
   const totalCorrect = quizResults.filter((r) => r.result === 'correct').length;
@@ -72,6 +73,7 @@ export default function ResultsScreen() {
           finalKnowledgePanelState: state.knowledgePanelState,
           quizResults: state.quizResults,
           resultsReflection: state.resultsReflection,
+          preGeneratedQuiz: state.preGeneratedQuiz,
         };
         localStorage.setItem(
           `sage_session_${sessionData.timestamp}`,
@@ -117,8 +119,8 @@ export default function ResultsScreen() {
     setPhase('onboarding');
   };
 
-  const lowMedConcepts = knowledgePanelState.concepts.filter(
-    (c) => c.confidence !== 'high'
+  const conceptsToReview = quizResults.filter(
+    (r) => r.was_taught === false || r.result === 'incorrect'
   );
 
   return (
@@ -272,15 +274,15 @@ export default function ResultsScreen() {
               </p>
             )}
 
-            {/* Low/medium confidence concepts */}
-            {lowMedConcepts.length > 0 && (
+            {/* Concepts to review */}
+            {conceptsToReview.length > 0 && (
               <div style={{ marginBottom: 28 }}>
                 <h3 style={{ fontSize: 11, fontWeight: 600, color: '#9B9A96', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 14 }}>
                   Concepts to review
                 </h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {lowMedConcepts.map((concept, idx) => {
-                    const pill = pillConfig[concept.confidence] || pillConfig.low;
+                  {conceptsToReview.map((result, idx) => {
+                    const conceptName = preGeneratedQuiz?.find(q => q.id === result.question_id)?.concept || result.question;
                     return (
                       <div
                         key={idx}
@@ -293,25 +295,25 @@ export default function ResultsScreen() {
                       >
                         <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
                           <span style={{ fontSize: 14, fontWeight: 600, color: '#3D3D3A' }}>
-                            {concept.name}
+                            {conceptName}
                           </span>
                           <span
                             style={{
                               fontSize: 11,
                               fontWeight: 500,
-                              color: pill.text,
-                              background: pill.bg,
-                              border: `1px solid ${pill.border}`,
+                              color: result.was_taught === false ? '#A82B2B' : '#B8801A',
+                              background: result.was_taught === false ? '#FCE8E6' : '#FFF6E6',
+                              border: `1px solid ${result.was_taught === false ? '#FAD2CD' : '#FFE7C2'}`,
                               borderRadius: 999,
                               padding: '2px 10px',
                               whiteSpace: 'nowrap',
                             }}
                           >
-                            {pill.label}
+                            {result.was_taught === false ? 'Never taught' : 'Missed question'}
                           </span>
                         </div>
                         <p style={{ fontSize: 12, color: '#7A7975', fontStyle: 'italic', lineHeight: 1.55 }}>
-                          "{concept.note}"
+                          "{result.question}"
                         </p>
                       </div>
                     );

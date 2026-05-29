@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { parseFile, countWords, ACCEPTED_EXTENSIONS } from '../services/fileParser';
+import { parseFile, chunkDocument, ACCEPTED_EXTENSIONS } from '../services/fileParser';
 
 export default function FileDropzone({ onFileProcessed, maxFiles = 3, existingFiles = [] }) {
   const [isDragging, setIsDragging] = useState(false);
@@ -30,11 +30,11 @@ export default function FileDropzone({ onFileProcessed, maxFiles = 3, existingFi
 
     try {
       const text = await parseFile(file);
-      const wordCount = countWords(text);
+      const chunks = chunkDocument(text);
       onFileProcessed({
         name: file.name,
-        wordCount,
-        text,
+        chunkCount: chunks.length,
+        chunks,
       });
     } catch {
       setError("Couldn't read that file — try copying the text directly into the notes field above.");
@@ -143,7 +143,7 @@ export default function FileDropzone({ onFileProcessed, maxFiles = 3, existingFi
                 <polyline points="20 6 9 17 4 12" />
               </svg>
               <span>
-                Got it — {file.name} ({file.wordCount.toLocaleString()} words)
+                Got it — {file.name} ({file.chunkCount.toLocaleString()} sections ready to use)
               </span>
             </div>
           ))}

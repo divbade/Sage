@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import SageAvatar from '../components/SageAvatar';
 import FileDropzone from '../components/FileDropzone';
-import { checkContextLength } from '../services/fileParser';
+import { preGenerateQuiz } from '../services/claude';
 
 const CONTEXT_OPTIONS = [
   { id: 'exam_prep', emoji: '📝', label: 'Exam prep' },
@@ -39,8 +39,8 @@ export default function OnboardingScreen() {
   const [currentStep, setCurrentStep] = useState(1);
   const [topicInput, setTopicInput] = useState('');
   const [assessmentInput, setAssessmentInput] = useState('');
-  const [truncationNotice, setTruncationNotice] = useState(null);
   const [selectedConfidence, setSelectedConfidence] = useState(null);
+  const [isGeneratingQuiz, setIsGeneratingQuiz] = useState(false);
   const bottomRef = useRef(null);
 
   // Auto-scroll down when step changes
@@ -70,22 +70,62 @@ export default function OnboardingScreen() {
 
   const handleFileProcessed = (file) => {
     addFile(file);
-    const notice = checkContextLength(
-      [...state.uploadedFiles, file].map((f) => f.text).join('\n\n')
-    );
-    if (notice.truncated) {
-      setTruncationNotice(notice.message);
+  };
+
+  const handleConfidenceSelect = async (rating) => {
+    setSelectedConfidence(rating);
+    setIsGeneratingQuiz(true);
+    setConfidence(rating);
+
+    try {
+      const generatedQuiz = await preGenerateQuiz({
+        topic: state.topic,
+        contextSelection: state.contextSelection,
+        selfAssessment: state.selfAssessment,
+        uploadedChunks: state.uploadedChunks,
+      });
+
+      if (generatedQuiz && generatedQuiz.length > 0) {
+        state.dispatch({ type: 'SET_PRE_GENERATED_QUIZ', payload: generatedQuiz });
+        
+        const initialPanelState = {
+          overall_score: 0,
+          concepts: generatedQuiz.map(q => ({
+            name: q.concept,
+            confidence: "low",
+            note: "Sage hasn't learned about this yet.",
+            question_id: q.id
+          })),
+          gaps: generatedQuiz.map(q => q.concept)
+        };
+        state.dispatch({ type: 'UPDATE_KNOWLEDGE_PANEL', payload: initialPanelState });
+      }
+    } catch (err) {
+      console.error("Failed to pre-generate quiz:", err);
+      // Fallback: gracefully continue, though quiz will be empty
+    } finally {
+      setIsGeneratingQuiz(false);
+      setPhase('teaching');
     }
   };
 
-  const handleConfidenceSelect = (rating) => {
-    setSelectedConfidence(rating);
-    // Small delay to show the selection animation before transitioning
-    setTimeout(() => {
-      setConfidence(rating);
-      setPhase('teaching');
-    }, 200);
-  };
+  if (isGeneratingQuiz) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4 bg-cream animate-fade-in">
+        <div className="text-center">
+          <div className="flex justify-center mb-5">
+            <SageAvatar size="lg" state="thinking" />
+          </div>
+          <h2 className="text-navy-100 mb-2" style={{ fontSize: 20, fontWeight: 600 }}>
+            Sage is getting ready to learn...
+          </h2>
+          <p className="text-navy-400" style={{ fontSize: 14 }}>
+            Preparing the learning goals based on your topic.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-start justify-center px-6 py-16 md:py-24">
@@ -235,17 +275,6 @@ export default function OnboardingScreen() {
                 maxFiles={3}
                 existingFiles={state.uploadedFiles}
               />
-
-              {truncationNotice && (
-                <div className="mt-4 flex items-center gap-2 text-sm text-accent-amber animate-fade-in font-medium">
-                  <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="12" y1="8" x2="12" y2="12" />
-                    <line x1="12" y1="16" x2="12.01" y2="16" />
-                  </svg>
-                  {truncationNotice}
-                </div>
-              )}
 
               <div className="mt-5 flex justify-center">
                 {state.uploadedFiles.length > 0 ? (

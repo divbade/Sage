@@ -1,8 +1,9 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import JSZip from 'jszip';
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 // Configure PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 // Estimate tokens (rough: 1 token ≈ 4 chars)
 export function estimateTokens(text) {
@@ -12,6 +13,18 @@ export function estimateTokens(text) {
 // Count words in text
 export function countWords(text) {
   return (text || '').trim().split(/\s+/).filter(Boolean).length;
+}
+
+export function chunkDocument(text, chunkSize = 600, overlap = 100) {
+  const words = text.split(/\s+/);
+  const chunks = [];
+  let i = 0;
+  while (i < words.length) {
+    const chunk = words.slice(i, i + chunkSize).join(" ");
+    chunks.push(chunk);
+    i += chunkSize - overlap;
+  }
+  return chunks;
 }
 
 // ──────────────────────────────────────
@@ -100,14 +113,3 @@ export const ACCEPTED_MIME_TYPES = [
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ];
 
-// Token limit check and truncation notice
-export function checkContextLength(text) {
-  const tokens = estimateTokens(text);
-  if (tokens > 8000) {
-    return {
-      truncated: true,
-      message: "Your file was long — Sage is working from the first portion of it.",
-    };
-  }
-  return { truncated: false, message: null };
-}
