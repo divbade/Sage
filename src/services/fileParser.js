@@ -1,9 +1,8 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import JSZip from 'jszip';
-import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
-// Configure PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+// Configure PDF.js worker using a reliable CDN for production compatibility
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.7.284/build/pdf.worker.min.mjs';
 
 // Estimate tokens (rough: 1 token ≈ 4 chars)
 export function estimateTokens(text) {
